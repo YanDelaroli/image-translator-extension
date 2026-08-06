@@ -118,12 +118,14 @@ function fitText(label, maxSize) {
   }
 }
 
-function renderOcrResult(overlay, image, blocks) {
+async function renderOcrResult(overlay, image, blocks) {
   overlay.replaceChildren();
   const rect = image.getBoundingClientRect();
   const scaleX = rect.width / image.naturalWidth;
   const scaleY = rect.height / image.naturalHeight;
-  blocks.forEach(({ text, originalText, translationError, box }) => {
+
+  for (const { text, originalText, translationError, box } of blocks) {
+    const palette = translationError ? null : await globalThis.ImageTranslatorVisual?.sampleRegion(image, box);
     const label = document.createElement('div');
     label.textContent = text;
     label.title = translationError ? `${originalText || text}\nErro: ${translationError}` : (originalText && originalText !== text ? originalText : 'Texto reconhecido');
@@ -131,13 +133,16 @@ function renderOcrResult(overlay, image, blocks) {
       'position:absolute', `left:${Math.max(0, box.x * scaleX)}px`, `top:${Math.max(0, box.y * scaleY)}px`,
       `width:${Math.max(32, box.width * scaleX)}px`, `height:${Math.max(20, box.height * scaleY)}px`,
       'display:flex','align-items:center','justify-content:center','padding:3px 6px',
-      `background:${translationError ? 'rgba(255,235,235,.95)' : 'rgba(255,255,255,.95)'}`,
-      'color:#111','font-family:system-ui,sans-serif','font-weight:600','line-height:1.08','text-align:center',
-      'border:1px solid rgba(0,0,0,.18)','border-radius:3px','box-sizing:border-box','overflow:hidden','white-space:pre-line'
+      `background:${translationError ? 'rgba(255,235,235,.95)' : (palette?.background || 'rgba(255,255,255,.95)')}`,
+      `color:${translationError ? '#111' : (palette?.foreground || '#111')}`,
+      'font-family:system-ui,sans-serif','font-weight:600','line-height:1.08','text-align:center',
+      `border:1px solid ${translationError ? 'rgba(120,0,0,.2)' : (palette?.border || 'rgba(0,0,0,.18)')}`,
+      'border-radius:3px','box-sizing:border-box','overflow:hidden','white-space:pre-line',
+      'text-shadow:0 1px 1px rgba(0,0,0,.12)'
     ].join(';');
     overlay.appendChild(label);
     fitText(label, Math.max(12, Math.min(26, box.height * scaleY * 0.45)));
-  });
+  }
 }
 
 async function recognizeWithCache(image, status) {
@@ -161,7 +166,7 @@ async function processOverlay(overlay) {
   const paragraphs = globalThis.ImageTranslatorLayout.groupIntoParagraphs(lines);
   if (status) status.textContent = `Traduzindo ${paragraphs.length} parágrafo(s)…`;
   const result = await translateBlocks(paragraphs);
-  renderOcrResult(overlay, image, result.blocks);
+  await renderOcrResult(overlay, image, result.blocks);
   return { processed: true, skipped: result.skipped };
 }
 
