@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Image Translator",
-  "version": "0.3.0",
-  "description": "Detecta, traduz e sobrepõe textos encontrados em imagens.",
+  "version": "0.4.0",
+  "description": "Detecta, agrupa, traduz e sobrepõe textos encontrados em imagens.",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": ["<all_urls>"],
   "action": {
@@ -15,7 +15,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["vendor/tesseract.min.js", "ocr.js", "content.js"],
+      "js": ["vendor/tesseract.min.js", "ocr.js", "layout.js", "content.js"],
       "run_at": "document_idle"
     }
   ],
