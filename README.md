@@ -1,25 +1,53 @@
 # Image Translator Extension
 
-Extensão Chrome Manifest V3 para detectar texto em imagens, traduzir o conteúdo e substituir visualmente o texto original.
+Extensão Chrome Manifest V3 para reconhecer texto em imagens, traduzi-lo e desenhar o resultado sobre as regiões originais.
 
-## Estado atual
+## Recursos atuais
 
 - popup com ativação e idioma de destino;
 - detecção de imagens estáticas e dinâmicas;
-- sobreposições alinhadas às imagens durante rolagem e redimensionamento;
-- OCR experimental usando a API nativa `TextDetector`, quando disponível;
-- renderização das caixas de texto reconhecidas sobre a imagem;
-- fallback visível quando o navegador não oferece OCR nativo.
+- OCR nativo com `TextDetector`, quando disponível;
+- fallback para Tesseract.js empacotado localmente;
+- tradução por endpoint compatível com LibreTranslate;
+- chave de API opcional;
+- cache de traduções e deduplicação de requisições simultâneas;
+- sobreposições alinhadas durante rolagem e redimensionamento;
+- texto original disponível no tooltip.
 
-## Teste manual
+## Preparar a extensão
+
+Requer Node.js 20 ou superior.
+
+```bash
+npm install
+npm run build
+```
+
+O comando gera a pasta `dist/` e copia para ela o worker e o WebAssembly do Tesseract.js. O código executável do OCR fica dentro da própria extensão, conforme as exigências do Manifest V3.
+
+Na primeira utilização do fallback Tesseract, os modelos de idioma `eng`, `por` e `spa` são baixados do repositório público de dados do Project Naptha.
+
+## Instalar no Chrome
 
 1. Abra `chrome://extensions`.
 2. Ative **Modo do desenvolvedor**.
 3. Clique em **Carregar sem compactação**.
-4. Selecione a pasta do projeto.
-5. Abra uma página com imagens contendo texto.
-6. Ative a extensão e clique em **Analisar página**.
+4. Selecione a pasta `dist/`.
+5. Configure opcionalmente um endpoint compatível com LibreTranslate.
+6. Abra uma página com imagens contendo texto.
+7. Ative a extensão e clique em **Analisar e traduzir página**.
+
+## Limitações atuais
+
+- a reconstrução do fundo atrás do texto ainda usa caixas opacas;
+- imagens protegidas por CORS podem falhar em alguns cenários;
+- o reconhecimento inicial do Tesseract é mais lento por causa do carregamento dos modelos;
+- os idiomas OCR empacotados inicialmente são inglês, português e espanhol.
 
 ## Próximas etapas
 
-A API `TextDetector` não está disponível em todas as versões do Chrome. A próxima implementação adicionará um motor OCR empacotado, como Tesseract.js, e depois conectará um provedor de tradução.
+- cache persistente de OCR por hash da imagem;
+- agrupamento de palavras em linhas e parágrafos;
+- reconstrução visual do fundo;
+- suporte configurável a outros idiomas OCR;
+- testes automatizados e pacote de distribuição.
