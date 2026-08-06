@@ -44,11 +44,11 @@ languageSelect.addEventListener('change', async () => {
 });
 endpointInput.addEventListener('change', async () => {
   await sendSettings();
-  statusOutput.textContent = 'Endpoint salvo.';
+  statusOutput.textContent = 'Endpoint de fallback salvo.';
 });
 apiKeyInput.addEventListener('change', async () => {
   await sendSettings();
-  statusOutput.textContent = 'Chave salva.';
+  statusOutput.textContent = 'Chave de fallback salva.';
 });
 
 scanButton.addEventListener('click', async () => {
@@ -58,9 +58,15 @@ scanButton.addEventListener('click', async () => {
   if (!tab?.id) return void (statusOutput.textContent = 'Não foi possível acessar esta aba.');
   try {
     const response = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_PAGE' });
-    if (response?.unsupported) statusOutput.textContent = 'Nenhum motor OCR disponível.';
-    else if (response?.translationSkipped) statusOutput.textContent = `${response.processed ?? 0} imagem(ns) reconhecida(s). Configure a API para traduzir.`;
-    else statusOutput.textContent = `${response?.processed ?? 0} imagem(ns) processada(s).`;
+    if (response?.unsupported) {
+      statusOutput.textContent = 'Nenhum motor OCR disponível.';
+    } else if (response?.nativeSetupRequired) {
+      statusOutput.textContent = 'Clique em “Ativar tradução local” sobre a imagem para baixar o modelo do Chrome.';
+    } else if (response?.translationSkipped) {
+      statusOutput.textContent = `${response.processed ?? 0} imagem(ns) reconhecida(s), mas a tradução local não está disponível neste Chrome.`;
+    } else {
+      statusOutput.textContent = `${response?.processed ?? 0} imagem(ns) processada(s).`;
+    }
   } catch {
     statusOutput.textContent = 'Recarregue a página e tente novamente.';
   }
