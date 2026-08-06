@@ -1,5 +1,7 @@
 const OVERLAY_CLASS = 'image-translator-overlay';
 const LABEL_CLASS = 'image-translator-label';
+const OCR_CACHE_PREFIX = 'ocr-cache:';
+const OCR_CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
 let settings = { enabled: false, targetLanguage: 'pt', translationEndpoint: '', translationApiKey: '' };
 let observer;
 let processing = false;
@@ -29,18 +31,15 @@ function syncOverlay(overlay, image) {
 
 function createOverlay(image) {
   if (!settings.enabled || image.dataset.imageTranslatorReady || !isUsableImage(image)) return false;
-
   const overlay = document.createElement('div');
   overlay.className = OVERLAY_CLASS;
   overlay.dataset.sourceImageId = crypto.randomUUID();
   overlay.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;overflow:hidden;box-sizing:border-box';
-
   const status = document.createElement('div');
   status.className = LABEL_CLASS;
   status.textContent = `Pronta para OCR → ${settings.targetLanguage.toUpperCase()}`;
   status.style.cssText = 'position:absolute;left:0;top:0;max-width:100%;padding:5px 7px;background:rgba(17,17,17,.82);color:#fff;font:600 12px/1.3 system-ui,sans-serif;border-radius:0 0 6px 0;box-sizing:border-box';
   overlay.appendChild(status);
-
   image.dataset.imageTranslatorReady = overlay.dataset.sourceImageId;
   document.documentElement.appendChild(overlay);
   syncOverlay(overlay, image);
@@ -62,6 +61,33 @@ function refreshOverlayPositions() {
   });
 }
 
+async function hashText(value) {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function imageCacheKey(image) {
+  const identity = [image.currentSrc || image.src, image.naturalWidth, image.naturalHeight].join('|');
+  return `${OCR_CACHE_PREFIX}${await hashText(identity)}`;
+}
+
+async function readOcrCache(image) {
+  const key = await imageCacheKey(image);
+  const stored = await chrome.storage.local.get(key);
+  const entry = stored[key];
+  if (!entry || Date.now() - entry.createdAt > OCR_CACHE_MAX_AGE) {
+    if (entry) await chrome.storage.local.remove(key);
+    return null;
+  }
+  return entry.blocks;
+}
+
+async function writeOcrCache(image, blocks) {
+  const key = await imageCacheKey(image);
+  await chrome.storage.local.set({ [key]: { createdAt: Date.now(), blocks } });
+}
+
 async function translateBlock(text) {
   const response = await chrome.runtime.sendMessage({ type: 'TRANSLATE_TEXT', text, targetLanguage: settings.targetLanguage });
   if (!response?.ok) throw new Error(response?.error || 'Falha desconhecida na tradução');
@@ -71,7 +97,6 @@ async function translateBlock(text) {
 async function translateBlocks(blocks) {
   let skipped = false;
   const translated = [];
-
   for (const block of blocks) {
     try {
       const result = await translateBlock(block.text);
@@ -81,7 +106,6 @@ async function translateBlocks(blocks) {
       translated.push({ ...block, originalText: block.text, translationError: error.message });
     }
   }
-
   return { blocks: translated, skipped };
 }
 
@@ -99,37 +123,44 @@ function renderOcrResult(overlay, image, blocks) {
   const rect = image.getBoundingClientRect();
   const scaleX = rect.width / image.naturalWidth;
   const scaleY = rect.height / image.naturalHeight;
-
   blocks.forEach(({ text, originalText, translationError, box }) => {
     const label = document.createElement('div');
     label.textContent = text;
     label.title = translationError ? `${originalText || text}\nErro: ${translationError}` : (originalText && originalText !== text ? originalText : 'Texto reconhecido');
     label.style.cssText = [
-      'position:absolute',
-      `left:${Math.max(0, box.x * scaleX)}px`,
-      `top:${Math.max(0, box.y * scaleY)}px`,
-      `width:${Math.max(32, box.width * scaleX)}px`,
-      `height:${Math.max(20, box.height * scaleY)}px`,
-      'display:flex','align-items:center','justify-content:center','padding:2px 5px',
+      'position:absolute', `left:${Math.max(0, box.x * scaleX)}px`, `top:${Math.max(0, box.y * scaleY)}px`,
+      `width:${Math.max(32, box.width * scaleX)}px`, `height:${Math.max(20, box.height * scaleY)}px`,
+      'display:flex','align-items:center','justify-content:center','padding:3px 6px',
       `background:${translationError ? 'rgba(255,235,235,.95)' : 'rgba(255,255,255,.95)'}`,
-      'color:#111','font-family:system-ui,sans-serif','font-weight:600','line-height:1.05','text-align:center',
-      'border:1px solid rgba(0,0,0,.18)','border-radius:3px','box-sizing:border-box','overflow:hidden','white-space:normal'
+      'color:#111','font-family:system-ui,sans-serif','font-weight:600','line-height:1.08','text-align:center',
+      'border:1px solid rgba(0,0,0,.18)','border-radius:3px','box-sizing:border-box','overflow:hidden','white-space:pre-line'
     ].join(';');
     overlay.appendChild(label);
-    fitText(label, box.height * scaleY * 0.78);
+    fitText(label, Math.max(12, Math.min(26, box.height * scaleY * 0.45)));
   });
+}
+
+async function recognizeWithCache(image, status) {
+  const cached = await readOcrCache(image);
+  if (cached) {
+    if (status) status.textContent = 'OCR carregado do cache…';
+    return cached;
+  }
+  if (status) status.textContent = 'Reconhecendo texto…';
+  const blocks = await globalThis.ImageTranslatorOcr.recognize(image);
+  await writeOcrCache(image, blocks);
+  return blocks;
 }
 
 async function processOverlay(overlay) {
   const image = findImageForOverlay(overlay);
   if (!image || !isUsableImage(image)) return { processed: false, skipped: false };
   const status = overlay.querySelector(`.${LABEL_CLASS}`);
-  if (status) status.textContent = 'Reconhecendo texto…';
-
-  const recognizedBlocks = await globalThis.ImageTranslatorOcr.recognize(image);
-  const groupedLines = globalThis.ImageTranslatorLayout.groupIntoLines(recognizedBlocks);
-  if (status) status.textContent = `Traduzindo ${groupedLines.length} linha(s)…`;
-  const result = await translateBlocks(groupedLines);
+  const recognizedBlocks = await recognizeWithCache(image, status);
+  const lines = globalThis.ImageTranslatorLayout.groupIntoLines(recognizedBlocks);
+  const paragraphs = globalThis.ImageTranslatorLayout.groupIntoParagraphs(lines);
+  if (status) status.textContent = `Traduzindo ${paragraphs.length} parágrafo(s)…`;
+  const result = await translateBlocks(paragraphs);
   renderOcrResult(overlay, image, result.blocks);
   return { processed: true, skipped: result.skipped };
 }
@@ -139,13 +170,11 @@ async function runOcr() {
   processing = true;
   let processed = 0;
   let translationSkipped = false;
-
   try {
     if (!globalThis.ImageTranslatorOcr?.isSupported()) {
       document.querySelectorAll(`.${LABEL_CLASS}`).forEach((label) => { label.textContent = 'Nenhum motor OCR disponível'; });
       return { processed: 0, unsupported: true, translationSkipped: false };
     }
-
     for (const overlay of document.querySelectorAll(`.${OVERLAY_CLASS}`)) {
       try {
         const result = await processOverlay(overlay);
@@ -156,7 +185,6 @@ async function runOcr() {
         if (status) status.textContent = `Falha no processamento: ${error.message}`;
       }
     }
-
     return { processed, unsupported: false, translationSkipped };
   } finally {
     processing = false;
