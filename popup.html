@@ -9,7 +9,7 @@
   <body>
     <main>
       <h1>Image Translator</h1>
-      <p>Ative a tradução de textos encontrados em imagens.</p>
+      <p>Reconheça e traduza textos encontrados em imagens.</p>
 
       <label class="row">
         <span>Ativar extensão</span>
@@ -28,7 +28,19 @@
         </select>
       </label>
 
-      <button id="scan" type="button">Analisar página agora</button>
+      <details>
+        <summary>Configurar tradução</summary>
+        <label>
+          Endpoint compatível com LibreTranslate
+          <input id="translationEndpoint" type="url" placeholder="https://seu-servidor/translate" />
+        </label>
+        <label>
+          Chave da API (opcional)
+          <input id="translationApiKey" type="password" autocomplete="off" />
+        </label>
+      </details>
+
+      <button id="scan" type="button">Analisar e traduzir página</button>
       <output id="status" aria-live="polite"></output>
     </main>
     <script src="popup.js"></script>
