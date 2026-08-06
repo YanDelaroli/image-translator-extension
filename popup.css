@@ -27,5 +27,8 @@ button {
   cursor: pointer;
   font-weight: 700;
 }
+button + button { margin-top: 8px; }
+button.secondary { background: transparent; color: #30343b; border: 1px solid #c9cdd2; }
 button:hover { opacity: .88; }
+button:disabled { cursor: wait; opacity: .6; }
 output { display: block; min-height: 20px; margin-top: 12px; font-size: 13px; color: #4d5156; }
