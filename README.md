@@ -8,10 +8,12 @@ Extensão Chrome Manifest V3 para reconhecer texto em imagens, traduzi-lo e dese
 - detecção de imagens estáticas e dinâmicas;
 - OCR nativo com `TextDetector`, quando disponível;
 - fallback para Tesseract.js empacotado localmente;
+- agrupamento geométrico de palavras em linhas completas;
 - tradução por endpoint compatível com LibreTranslate;
 - chave de API opcional;
 - cache de traduções e deduplicação de requisições simultâneas;
 - sobreposições alinhadas durante rolagem e redimensionamento;
+- ajuste automático do tamanho da fonte para caber na região original;
 - texto original disponível no tooltip.
 
 ## Preparar a extensão
@@ -37,17 +39,22 @@ Na primeira utilização do fallback Tesseract, os modelos de idioma `eng`, `por
 6. Abra uma página com imagens contendo texto.
 7. Ative a extensão e clique em **Analisar e traduzir página**.
 
+## Como o agrupamento funciona
+
+O OCR produz palavras ou blocos com coordenadas. A extensão compara a posição vertical, altura e distância horizontal desses blocos para reconstruir linhas. Cada linha é traduzida como uma frase completa, melhorando contexto, ordem das palavras e naturalidade do resultado.
+
 ## Limitações atuais
 
 - a reconstrução do fundo atrás do texto ainda usa caixas opacas;
 - imagens protegidas por CORS podem falhar em alguns cenários;
 - o reconhecimento inicial do Tesseract é mais lento por causa do carregamento dos modelos;
-- os idiomas OCR empacotados inicialmente são inglês, português e espanhol.
+- os idiomas OCR iniciais são inglês, português e espanhol;
+- textos inclinados, curvos ou verticais ainda podem ser agrupados incorretamente.
 
 ## Próximas etapas
 
+- agrupamento de linhas em parágrafos;
 - cache persistente de OCR por hash da imagem;
-- agrupamento de palavras em linhas e parágrafos;
 - reconstrução visual do fundo;
 - suporte configurável a outros idiomas OCR;
 - testes automatizados e pacote de distribuição.
