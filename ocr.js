@@ -19,13 +19,14 @@ class ImageTranslatorOcrEngine {
       throw new Error('Tesseract.js não foi empacotado na extensão.');
     }
 
-    this.tesseractWorkerPromise ??= (async () => {
-      const worker = await globalThis.Tesseract.createWorker('eng+por+spa');
-      await worker.setParameters({
-        preserve_interword_spaces: '1'
-      });
+    this.tesseractWorkerPromise ??= globalThis.Tesseract.createWorker('eng+por+spa', 1, {
+      workerPath: chrome.runtime.getURL('vendor/worker.min.js'),
+      corePath: chrome.runtime.getURL('vendor/tesseract-core.wasm.js'),
+      langPath: 'https://tessdata.projectnaptha.com/4.0.0'
+    }).then(async (worker) => {
+      await worker.setParameters({ preserve_interword_spaces: '1' });
       return worker;
-    })();
+    });
 
     return this.tesseractWorkerPromise;
   }
@@ -70,14 +71,12 @@ class ImageTranslatorOcrEngine {
   async recognize(image) {
     const engine = this.getEngineName();
     if (!engine) {
-      throw new Error('Nenhum motor OCR está disponível. Execute o build para empacotar o Tesseract.js.');
+      throw new Error('Nenhum motor OCR está disponível. Execute npm install e npm run build.');
     }
 
-    if (engine === 'TextDetector') {
-      return this.recognizeWithNativeDetector(image);
-    }
-
-    return this.recognizeWithTesseract(image);
+    return engine === 'TextDetector'
+      ? this.recognizeWithNativeDetector(image)
+      : this.recognizeWithTesseract(image);
   }
 }
 
