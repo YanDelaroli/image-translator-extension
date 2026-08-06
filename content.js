@@ -88,7 +88,21 @@ async function writeOcrCache(image, blocks) {
   await chrome.storage.local.set({ [key]: { createdAt: Date.now(), blocks } });
 }
 
-async function translateBlock(text) {
+async function translateWithFallback(text) {
+  try {
+    const nativeResult = await globalThis.ImageTranslatorNative?.translate(text, settings.targetLanguage);
+    if (nativeResult?.supported) {
+      return { translatedText: nativeResult.translatedText, skipped: false, provider: nativeResult.provider };
+    }
+  } catch (error) {
+    if (error.code === 'NATIVE_SETUP_REQUIRED') {
+      const fallback = await chrome.runtime.sendMessage({ type: 'TRANSLATE_TEXT', text, targetLanguage: settings.targetLanguage });
+      if (fallback?.ok && !fallback.skipped) return fallback;
+      return { translatedText: text, skipped: true, reason: 'native_setup_required' };
+    }
+    console.warn('Falha na tradução nativa:', error);
+  }
+
   const response = await chrome.runtime.sendMessage({ type: 'TRANSLATE_TEXT', text, targetLanguage: settings.targetLanguage });
   if (!response?.ok) throw new Error(response?.error || 'Falha desconhecida na tradução');
   return response;
@@ -96,17 +110,19 @@ async function translateBlock(text) {
 
 async function translateBlocks(blocks) {
   let skipped = false;
+  let setupRequired = false;
   const translated = [];
   for (const block of blocks) {
     try {
-      const result = await translateBlock(block.text);
+      const result = await translateWithFallback(block.text);
       skipped ||= Boolean(result.skipped);
+      setupRequired ||= result.reason === 'native_setup_required';
       translated.push({ ...block, originalText: block.text, text: result.translatedText });
     } catch (error) {
       translated.push({ ...block, originalText: block.text, translationError: error.message });
     }
   }
-  return { blocks: translated, skipped };
+  return { blocks: translated, skipped, setupRequired };
 }
 
 function fitText(label, maxSize) {
@@ -118,7 +134,25 @@ function fitText(label, maxSize) {
   }
 }
 
-async function renderOcrResult(overlay, image, blocks) {
+function addNativeSetupButton(overlay) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = 'Ativar tradução local';
+  button.style.cssText = 'position:absolute;left:50%;top:12px;transform:translateX(-50%);z-index:3;pointer-events:auto;border:0;border-radius:8px;padding:9px 12px;background:#111;color:#fff;font:700 12px system-ui;cursor:pointer;box-shadow:0 3px 12px rgba(0,0,0,.35)';
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    button.textContent = 'Baixando modelo…';
+    try {
+      await processOverlay(overlay);
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = `Tentar novamente: ${error.message}`;
+    }
+  });
+  overlay.appendChild(button);
+}
+
+async function renderOcrResult(overlay, image, blocks, setupRequired = false) {
   overlay.replaceChildren();
   const rect = image.getBoundingClientRect();
   const scaleX = rect.width / image.naturalWidth;
@@ -137,12 +171,13 @@ async function renderOcrResult(overlay, image, blocks) {
       `color:${translationError ? '#111' : (palette?.foreground || '#111')}`,
       'font-family:system-ui,sans-serif','font-weight:600','line-height:1.08','text-align:center',
       `border:1px solid ${translationError ? 'rgba(120,0,0,.2)' : (palette?.border || 'rgba(0,0,0,.18)')}`,
-      'border-radius:3px','box-sizing:border-box','overflow:hidden','white-space:pre-line',
-      'text-shadow:0 1px 1px rgba(0,0,0,.12)'
+      'border-radius:3px','box-sizing:border-box','overflow:hidden','white-space:pre-line','text-shadow:0 1px 1px rgba(0,0,0,.12)'
     ].join(';');
     overlay.appendChild(label);
     fitText(label, Math.max(12, Math.min(26, box.height * scaleY * 0.45)));
   }
+
+  if (setupRequired) addNativeSetupButton(overlay);
 }
 
 async function recognizeWithCache(image, status) {
@@ -159,38 +194,40 @@ async function recognizeWithCache(image, status) {
 
 async function processOverlay(overlay) {
   const image = findImageForOverlay(overlay);
-  if (!image || !isUsableImage(image)) return { processed: false, skipped: false };
+  if (!image || !isUsableImage(image)) return { processed: false, skipped: false, setupRequired: false };
   const status = overlay.querySelector(`.${LABEL_CLASS}`);
   const recognizedBlocks = await recognizeWithCache(image, status);
   const lines = globalThis.ImageTranslatorLayout.groupIntoLines(recognizedBlocks);
   const paragraphs = globalThis.ImageTranslatorLayout.groupIntoParagraphs(lines);
   if (status) status.textContent = `Traduzindo ${paragraphs.length} parágrafo(s)…`;
   const result = await translateBlocks(paragraphs);
-  await renderOcrResult(overlay, image, result.blocks);
-  return { processed: true, skipped: result.skipped };
+  await renderOcrResult(overlay, image, result.blocks, result.setupRequired);
+  return { processed: true, skipped: result.skipped, setupRequired: result.setupRequired };
 }
 
 async function runOcr() {
-  if (processing || !settings.enabled) return { processed: 0, unsupported: false, translationSkipped: false };
+  if (processing || !settings.enabled) return { processed: 0, unsupported: false, translationSkipped: false, nativeSetupRequired: false };
   processing = true;
   let processed = 0;
   let translationSkipped = false;
+  let nativeSetupRequired = false;
   try {
     if (!globalThis.ImageTranslatorOcr?.isSupported()) {
       document.querySelectorAll(`.${LABEL_CLASS}`).forEach((label) => { label.textContent = 'Nenhum motor OCR disponível'; });
-      return { processed: 0, unsupported: true, translationSkipped: false };
+      return { processed: 0, unsupported: true, translationSkipped: false, nativeSetupRequired: false };
     }
     for (const overlay of document.querySelectorAll(`.${OVERLAY_CLASS}`)) {
       try {
         const result = await processOverlay(overlay);
         if (result.processed) processed += 1;
         translationSkipped ||= result.skipped;
+        nativeSetupRequired ||= result.setupRequired;
       } catch (error) {
         const status = overlay.querySelector(`.${LABEL_CLASS}`);
         if (status) status.textContent = `Falha no processamento: ${error.message}`;
       }
     }
-    return { processed, unsupported: false, translationSkipped };
+    return { processed, unsupported: false, translationSkipped, nativeSetupRequired };
   } finally {
     processing = false;
   }
