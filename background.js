@@ -4,6 +4,9 @@ const DEFAULTS = {
   translationEndpoint: '',
   translationApiKey: ''
 };
+const translationCache = new Map();
+const inFlightTranslations = new Map();
+const MAX_CACHE_ENTRIES = 500;
 
 chrome.runtime.onInstalled.addListener(async () => {
   const current = await chrome.storage.sync.get(Object.keys(DEFAULTS));
@@ -15,7 +18,14 @@ chrome.runtime.onInstalled.addListener(async () => {
   });
 });
 
-async function translateText(text, targetLanguage) {
+function rememberTranslation(key, value) {
+  if (translationCache.size >= MAX_CACHE_ENTRIES) {
+    translationCache.delete(translationCache.keys().next().value);
+  }
+  translationCache.set(key, value);
+}
+
+async function requestTranslation(text, targetLanguage) {
   const { translationEndpoint, translationApiKey } = await chrome.storage.sync.get({
     translationEndpoint: '',
     translationApiKey: ''
@@ -52,6 +62,29 @@ async function translateText(text, targetLanguage) {
   }
 
   return { translatedText, skipped: false };
+}
+
+async function translateText(text, targetLanguage) {
+  const normalizedText = text.trim();
+  const cacheKey = `${targetLanguage}:${normalizedText}`;
+
+  if (translationCache.has(cacheKey)) {
+    return { ...translationCache.get(cacheKey), cached: true };
+  }
+
+  if (inFlightTranslations.has(cacheKey)) {
+    return inFlightTranslations.get(cacheKey);
+  }
+
+  const pending = requestTranslation(normalizedText, targetLanguage)
+    .then((result) => {
+      rememberTranslation(cacheKey, result);
+      return result;
+    })
+    .finally(() => inFlightTranslations.delete(cacheKey));
+
+  inFlightTranslations.set(cacheKey, pending);
+  return pending;
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
