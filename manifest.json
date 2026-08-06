@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Image Translator",
-  "version": "0.1.0",
-  "description": "Detecta imagens na página e prepara sobreposições para tradução de texto.",
+  "version": "0.2.0",
+  "description": "Detecta texto em imagens e prepara sua substituição visual traduzida.",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": ["<all_urls>"],
   "action": {
@@ -15,7 +15,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["ocr.js", "content.js"],
       "run_at": "document_idle"
     }
   ]
