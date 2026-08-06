@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Image Translator",
-  "version": "0.2.0",
-  "description": "Detecta texto em imagens e prepara sua substituição visual traduzida.",
+  "version": "0.3.0",
+  "description": "Detecta, traduz e sobrepõe textos encontrados em imagens.",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": ["<all_urls>"],
   "action": {
@@ -15,8 +15,14 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["ocr.js", "content.js"],
+      "js": ["vendor/tesseract.min.js", "ocr.js", "content.js"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["vendor/worker.min.js", "vendor/tesseract-core.wasm.js", "vendor/tesseract-core.wasm"],
+      "matches": ["<all_urls>"]
     }
   ]
 }
