@@ -9,6 +9,9 @@ const files = [
   'background.js',
   'content.js',
   'ocr.js',
+  'layout.js',
+  'visual.js',
+  'translator.js',
   'popup.html',
   'popup.css',
   'popup.js'
