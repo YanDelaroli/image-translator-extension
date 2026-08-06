@@ -8,10 +8,11 @@ Extensão Chrome Manifest V3 para reconhecer texto em imagens, traduzi-lo e dese
 - detecção de imagens estáticas e dinâmicas;
 - OCR nativo com `TextDetector`, quando disponível;
 - fallback para Tesseract.js empacotado localmente;
-- agrupamento geométrico de palavras em linhas completas;
+- agrupamento geométrico de palavras em linhas e parágrafos;
 - tradução por endpoint compatível com LibreTranslate;
 - chave de API opcional;
 - cache de traduções e deduplicação de requisições simultâneas;
+- cache persistente de OCR por identidade da imagem, com validade de sete dias;
 - sobreposições alinhadas durante rolagem e redimensionamento;
 - ajuste automático do tamanho da fonte para caber na região original;
 - texto original disponível no tooltip.
@@ -41,7 +42,11 @@ Na primeira utilização do fallback Tesseract, os modelos de idioma `eng`, `por
 
 ## Como o agrupamento funciona
 
-O OCR produz palavras ou blocos com coordenadas. A extensão compara a posição vertical, altura e distância horizontal desses blocos para reconstruir linhas. Cada linha é traduzida como uma frase completa, melhorando contexto, ordem das palavras e naturalidade do resultado.
+O OCR produz palavras ou blocos com coordenadas. A extensão compara posição vertical, altura, distância e sobreposição horizontal para reconstruir linhas. Linhas próximas e alinhadas são agrupadas em parágrafos, que são traduzidos como unidades completas para preservar melhor o contexto.
+
+## Cache de OCR
+
+A identidade da imagem é calculada a partir da URL atual e das dimensões naturais. O resultado bruto do OCR é salvo em `chrome.storage.local` por sete dias. Ao encontrar novamente a mesma imagem, a extensão reutiliza as caixas reconhecidas e evita executar o motor OCR novamente.
 
 ## Limitações atuais
 
@@ -49,12 +54,12 @@ O OCR produz palavras ou blocos com coordenadas. A extensão compara a posição
 - imagens protegidas por CORS podem falhar em alguns cenários;
 - o reconhecimento inicial do Tesseract é mais lento por causa do carregamento dos modelos;
 - os idiomas OCR iniciais são inglês, português e espanhol;
-- textos inclinados, curvos ou verticais ainda podem ser agrupados incorretamente.
+- textos inclinados, curvos, verticais ou com colunas muito próximas podem ser agrupados incorretamente;
+- mudanças visuais em uma imagem servida pela mesma URL podem permanecer no cache até a expiração.
 
 ## Próximas etapas
 
-- agrupamento de linhas em parágrafos;
-- cache persistente de OCR por hash da imagem;
 - reconstrução visual do fundo;
+- botão para limpar caches;
 - suporte configurável a outros idiomas OCR;
 - testes automatizados e pacote de distribuição.
