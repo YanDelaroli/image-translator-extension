@@ -85,32 +85,15 @@ function blockKey(text, x, y, width, height) {
   return `${normalized}|${Math.round(x / 24)}|${Math.round(y / 24)}|${Math.round(width / 24)}|${Math.round(height / 24)}`;
 }
 
-function cropTile(image, sourceY, sourceHeight) {
-  const canvas = document.createElement('canvas');
-  canvas.width = image.naturalWidth;
-  canvas.height = sourceHeight;
-  const context = canvas.getContext('2d', { willReadFrequently: true });
-  context.drawImage(image, 0, sourceY, image.naturalWidth, sourceHeight, 0, 0, image.naturalWidth, sourceHeight);
-  return canvas;
-}
-
 async function processFullPageWithoutScroll() {
   document.getElementById(SCREEN_OVERLAY_ID)?.remove();
   document.getElementById(PAGE_OVERLAY_ID)?.remove();
-  const capture = await chrome.runtime.sendMessage({ type: 'CAPTURE_FULL_PAGE' });
-  if (!capture?.ok || !capture.dataUrl) throw new Error(capture?.error || 'Falha ao capturar a página inteira.');
 
-  const screenshot = await loadScreenshot(capture.dataUrl);
-  const documentWidth = capture.width || document.documentElement.scrollWidth;
-  const documentHeight = capture.height || document.documentElement.scrollHeight;
-  const pixelPerCssX = screenshot.naturalWidth / documentWidth;
-  const pixelPerCssY = screenshot.naturalHeight / documentHeight;
-  const cssPerPixelX = documentWidth / screenshot.naturalWidth;
-  const cssPerPixelY = documentHeight / screenshot.naturalHeight;
-  const tilePixelHeight = Math.max(200, Math.round(OCR_TILE_CSS_HEIGHT * pixelPerCssY));
-  const overlapPixels = Math.max(20, Math.round(OCR_TILE_OVERLAP * pixelPerCssY));
-  const stepPixels = Math.max(1, tilePixelHeight - overlapPixels);
+  const start = await chrome.runtime.sendMessage({ type: 'START_FULL_PAGE_CAPTURE' });
+  if (!start?.ok) throw new Error(start?.error || 'Falha ao iniciar a captura da página.');
 
+  const documentWidth = start.width;
+  const documentHeight = start.height;
   const overlay = document.createElement('div');
   overlay.id = PAGE_OVERLAY_ID;
   overlay.style.cssText = `position:absolute;left:0;top:0;width:${documentWidth}px;height:${documentHeight}px;z-index:2147483646;pointer-events:none;overflow:visible`;
@@ -118,43 +101,57 @@ async function processFullPageWithoutScroll() {
 
   const { targetLanguage = 'pt' } = await chrome.storage.sync.get({ targetLanguage: 'pt' });
   const seen = new Set();
+  const step = Math.max(1, OCR_TILE_CSS_HEIGHT - OCR_TILE_OVERLAP);
   let totalBlocks = 0;
   let tiles = 0;
   let setupRequired = false;
 
-  for (let sourceY = 0; sourceY < screenshot.naturalHeight && tiles < MAX_FULL_PAGE_TILES; sourceY += stepPixels) {
-    const sourceHeight = Math.min(tilePixelHeight, screenshot.naturalHeight - sourceY);
-    const tile = cropTile(screenshot, sourceY, sourceHeight);
-    const paragraphs = await recognizeScreenshot(tile);
+  try {
+    for (let tileY = 0; tileY < documentHeight && tiles < MAX_FULL_PAGE_TILES; tileY += step) {
+      const cssHeight = Math.min(OCR_TILE_CSS_HEIGHT, documentHeight - tileY);
+      const capture = await chrome.runtime.sendMessage({
+        type: 'CAPTURE_FULL_PAGE_TILE',
+        y: tileY,
+        height: cssHeight
+      });
+      if (!capture?.ok || !capture.dataUrl) throw new Error(capture?.error || `Falha ao capturar o trecho ${tiles + 1}.`);
 
-    for (const block of paragraphs) {
-      const docX = block.box.x * cssPerPixelX;
-      const docY = (sourceY + block.box.y) * cssPerPixelY;
-      const docWidth = block.box.width * cssPerPixelX;
-      const docHeight = block.box.height * cssPerPixelY;
-      const key = blockKey(block.text, docX, docY, docWidth, docHeight);
-      if (seen.has(key)) continue;
-      seen.add(key);
+      const screenshot = await loadScreenshot(capture.dataUrl);
+      const scaleX = capture.width / screenshot.naturalWidth;
+      const scaleY = capture.height / screenshot.naturalHeight;
+      const paragraphs = await recognizeScreenshot(screenshot);
 
-      let translated = block.text;
-      try { translated = await translateText(block.text, targetLanguage); }
-      catch (error) { if (error.code === 'NATIVE_SETUP_REQUIRED') setupRequired = true; }
+      for (const block of paragraphs) {
+        const docX = block.box.x * scaleX;
+        const docY = capture.y + block.box.y * scaleY;
+        const docWidth = block.box.width * scaleX;
+        const docHeight = block.box.height * scaleY;
+        const key = blockKey(block.text, docX, docY, docWidth, docHeight);
+        if (seen.has(key)) continue;
+        seen.add(key);
 
-      const label = createLabel(block, translated, cssPerPixelX, cssPerPixelY, 0, sourceY * cssPerPixelY);
-      overlay.appendChild(label);
-      fitText(label, block.box.height * cssPerPixelY * 0.45);
-      totalBlocks += 1;
+        let translated = block.text;
+        try { translated = await translateText(block.text, targetLanguage); }
+        catch (error) { if (error.code === 'NATIVE_SETUP_REQUIRED') setupRequired = true; }
+
+        const label = createLabel(block, translated, scaleX, scaleY, 0, capture.y);
+        overlay.appendChild(label);
+        fitText(label, block.box.height * scaleY * 0.45);
+        totalBlocks += 1;
+      }
+      tiles += 1;
     }
-    tiles += 1;
-  }
 
-  return {
-    processed: tiles,
-    blocks: totalBlocks,
-    nativeSetupRequired: setupRequired,
-    truncated: tiles >= MAX_FULL_PAGE_TILES && tilePixelHeight * tiles < screenshot.naturalHeight,
-    captureMode: 'debugger-full-page'
-  };
+    return {
+      processed: tiles,
+      blocks: totalBlocks,
+      nativeSetupRequired: setupRequired,
+      truncated: tiles >= MAX_FULL_PAGE_TILES && step * tiles < documentHeight,
+      captureMode: 'debugger-streamed-tiles'
+    };
+  } finally {
+    await chrome.runtime.sendMessage({ type: 'END_FULL_PAGE_CAPTURE' }).catch(() => {});
+  }
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
