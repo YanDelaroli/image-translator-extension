@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Image Translator",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Reconhece e traduz textos em imagens, canvas, fundos CSS e páginas inteiras sem rolagem visível.",
   "permissions": ["storage", "activeTab", "scripting", "debugger"],
   "host_permissions": ["<all_urls>"],
