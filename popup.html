@@ -32,7 +32,7 @@
         <summary>Configurar tradução</summary>
         <label>
           Endpoint compatível com LibreTranslate
-          <input id="translationEndpoint" type="url" placeholder="https://seu-servidor/translate" />
+          <input id="translationEndpoint" type="url" placeholder="Opcional: https://seu-servidor/translate" />
         </label>
         <label>
           Chave da API (opcional)
@@ -40,7 +40,8 @@
         </label>
       </details>
 
-      <button id="scan" type="button">Analisar e traduzir página</button>
+      <button id="scan" type="button">Analisar imagens da página</button>
+      <button id="scanScreen" class="secondary" type="button">Capturar área visível</button>
       <button id="clearCache" class="secondary" type="button">Limpar caches</button>
       <output id="status" aria-live="polite"></output>
     </main>
