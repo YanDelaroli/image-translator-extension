@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Image Translator",
-  "version": "0.7.0",
-  "description": "Reconhece, traduz localmente e sobrepõe textos encontrados em imagens.",
+  "version": "0.7.1",
+  "description": "Reconhece, agrupa, traduz e sobrepõe textos encontrados em imagens.",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": ["<all_urls>"],
   "action": {
