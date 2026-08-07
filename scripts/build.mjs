@@ -8,6 +8,7 @@ const files = [
   'manifest.json',
   'background.js',
   'content.js',
+  'screenshot.js',
   'ocr.js',
   'layout.js',
   'visual.js',
