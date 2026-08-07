@@ -27,7 +27,6 @@ function rememberTranslation(key, value) {
 async function requestTranslation(text, targetLanguage) {
   const { translationEndpoint, translationApiKey } = await chrome.storage.sync.get({ translationEndpoint: '', translationApiKey: '' });
   if (!translationEndpoint) return { translatedText: text, skipped: true, reason: 'missing_endpoint' };
-
   const body = { q: text, source: 'auto', target: targetLanguage, format: 'text' };
   if (translationApiKey) body.api_key = translationApiKey;
   const response = await fetch(translationEndpoint, {
@@ -47,7 +46,6 @@ async function translateText(text, targetLanguage) {
   const cacheKey = `${targetLanguage}:${normalizedText}`;
   if (translationCache.has(cacheKey)) return { ...translationCache.get(cacheKey), cached: true };
   if (inFlightTranslations.has(cacheKey)) return inFlightTranslations.get(cacheKey);
-
   const pending = requestTranslation(normalizedText, targetLanguage)
     .then((result) => {
       rememberTranslation(cacheKey, result);
@@ -68,6 +66,28 @@ async function clearCaches() {
   return removed;
 }
 
+async function captureFullPage(tabId) {
+  const target = { tabId };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(target, '1.3');
+    attached = true;
+    await chrome.debugger.sendCommand(target, 'Page.enable');
+    const metrics = await chrome.debugger.sendCommand(target, 'Page.getLayoutMetrics');
+    const size = metrics.cssContentSize || metrics.contentSize;
+    if (!size?.width || !size?.height) throw new Error('Não foi possível medir a página.');
+    const result = await chrome.debugger.sendCommand(target, 'Page.captureScreenshot', {
+      format: 'png',
+      fromSurface: true,
+      captureBeyondViewport: true,
+      clip: { x: 0, y: 0, width: size.width, height: size.height, scale: 1 }
+    });
+    return { dataUrl: `data:image/png;base64,${result.data}`, width: size.width, height: size.height };
+  } finally {
+    if (attached) await chrome.debugger.detach(target).catch(() => {});
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'TRANSLATE_TEXT') {
     translateText(message.text, message.targetLanguage)
@@ -75,18 +95,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
   }
-
   if (message.type === 'CLEAR_CACHES') {
-    clearCaches()
-      .then((removed) => sendResponse({ ok: true, removed }))
+    clearCaches().then((removed) => sendResponse({ ok: true, removed })).catch((error) => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+  if (message.type === 'CAPTURE_VISIBLE_TAB') {
+    chrome.tabs.captureVisibleTab(sender.tab?.windowId, { format: 'png' })
+      .then((dataUrl) => sendResponse({ ok: true, dataUrl }))
       .catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
   }
-
-  if (message.type === 'CAPTURE_VISIBLE_TAB') {
-    const windowId = sender.tab?.windowId;
-    chrome.tabs.captureVisibleTab(windowId, { format: 'png' })
-      .then((dataUrl) => sendResponse({ ok: true, dataUrl }))
+  if (message.type === 'CAPTURE_FULL_PAGE') {
+    if (!sender.tab?.id) {
+      sendResponse({ ok: false, error: 'A aba ativa não foi identificada.' });
+      return;
+    }
+    captureFullPage(sender.tab.id)
+      .then((result) => sendResponse({ ok: true, ...result }))
       .catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
   }
