@@ -4,6 +4,7 @@ const endpointInput = document.querySelector('#translationEndpoint');
 const apiKeyInput = document.querySelector('#translationApiKey');
 const scanButton = document.querySelector('#scan');
 const scanScreenButton = document.querySelector('#scanScreen');
+const scanFullPageButton = document.querySelector('#scanFullPage');
 const clearCacheButton = document.querySelector('#clearCache');
 const statusOutput = document.querySelector('#status');
 
@@ -81,6 +82,29 @@ scanScreenButton.addEventListener('click', async () => {
     else statusOutput.textContent = `${response?.blocks ?? 0} bloco(s) traduzido(s) na área visível.`;
   } catch {
     statusOutput.textContent = 'Não foi possível capturar esta página.';
+  }
+});
+
+scanFullPageButton.addEventListener('click', async () => {
+  await sendSettings();
+  scanFullPageButton.disabled = true;
+  statusOutput.textContent = 'Percorrendo e traduzindo a página inteira...';
+  const tab = await getActiveTab();
+  if (!tab?.id) {
+    scanFullPageButton.disabled = false;
+    return void (statusOutput.textContent = 'Não foi possível acessar esta aba.');
+  }
+  try {
+    const response = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_FULL_PAGE' });
+    if (response?.error) statusOutput.textContent = `Falha: ${response.error}`;
+    else if (!response?.blocks) statusOutput.textContent = 'Nenhum texto foi encontrado na página.';
+    else if (response?.nativeSetupRequired) statusOutput.textContent = `${response.blocks} bloco(s) reconhecido(s). A tradução local precisa ser ativada.`;
+    else if (response?.truncated) statusOutput.textContent = `${response.blocks} bloco(s) traduzido(s). A página excedeu o limite de capturas.`;
+    else statusOutput.textContent = `${response.blocks} bloco(s) traduzido(s) em ${response.processed} trecho(s).`;
+  } catch {
+    statusOutput.textContent = 'Não foi possível capturar a página inteira.';
+  } finally {
+    scanFullPageButton.disabled = false;
   }
 });
 
