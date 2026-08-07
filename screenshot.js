@@ -1,6 +1,8 @@
 const SCREEN_OVERLAY_ID = 'image-translator-screen-overlay';
 const PAGE_OVERLAY_ID = 'image-translator-page-overlay';
-const MAX_FULL_PAGE_CAPTURES = 80;
+const OCR_TILE_CSS_HEIGHT = 1200;
+const OCR_TILE_OVERLAP = 120;
+const MAX_FULL_PAGE_TILES = 100;
 
 async function loadScreenshot(dataUrl) {
   const image = new Image();
@@ -19,7 +21,6 @@ async function translateText(text, targetLanguage) {
   } catch (error) {
     if (error.code === 'NATIVE_SETUP_REQUIRED') throw error;
   }
-
   const fallback = await chrome.runtime.sendMessage({ type: 'TRANSLATE_TEXT', text, targetLanguage });
   return fallback?.ok && !fallback.skipped ? fallback.translatedText : text;
 }
@@ -57,32 +58,24 @@ async function processVisibleTab() {
   document.getElementById(SCREEN_OVERLAY_ID)?.remove();
   const capture = await chrome.runtime.sendMessage({ type: 'CAPTURE_VISIBLE_TAB' });
   if (!capture?.ok || !capture.dataUrl) throw new Error(capture?.error || 'Falha ao capturar a área visível.');
-
   const screenshot = await loadScreenshot(capture.dataUrl);
   const paragraphs = await recognizeScreenshot(screenshot);
   if (!paragraphs.length) return { processed: 0, reason: 'no_text' };
-
   const { targetLanguage = 'pt' } = await chrome.storage.sync.get({ targetLanguage: 'pt' });
   const overlay = document.createElement('div');
   overlay.id = SCREEN_OVERLAY_ID;
   overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none;overflow:hidden';
-
   const scaleX = innerWidth / screenshot.naturalWidth;
   const scaleY = innerHeight / screenshot.naturalHeight;
   let setupRequired = false;
-
   for (const block of paragraphs) {
     let translated = block.text;
-    try {
-      translated = await translateText(block.text, targetLanguage);
-    } catch (error) {
-      if (error.code === 'NATIVE_SETUP_REQUIRED') setupRequired = true;
-    }
+    try { translated = await translateText(block.text, targetLanguage); }
+    catch (error) { if (error.code === 'NATIVE_SETUP_REQUIRED') setupRequired = true; }
     const label = createLabel(block, translated, scaleX, scaleY);
     overlay.appendChild(label);
     fitText(label, block.box.height * scaleY * 0.45);
   }
-
   document.documentElement.appendChild(overlay);
   return { processed: 1, blocks: paragraphs.length, nativeSetupRequired: setupRequired };
 }
@@ -92,89 +85,76 @@ function blockKey(text, x, y, width, height) {
   return `${normalized}|${Math.round(x / 24)}|${Math.round(y / 24)}|${Math.round(width / 24)}|${Math.round(height / 24)}`;
 }
 
-function waitForScroll() {
-  return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 140))));
+function cropTile(image, sourceY, sourceHeight) {
+  const canvas = document.createElement('canvas');
+  canvas.width = image.naturalWidth;
+  canvas.height = sourceHeight;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  context.drawImage(image, 0, sourceY, image.naturalWidth, sourceHeight, 0, 0, image.naturalWidth, sourceHeight);
+  return canvas;
 }
 
-async function processFullPage() {
+async function processFullPageWithoutScroll() {
   document.getElementById(SCREEN_OVERLAY_ID)?.remove();
   document.getElementById(PAGE_OVERLAY_ID)?.remove();
+  const capture = await chrome.runtime.sendMessage({ type: 'CAPTURE_FULL_PAGE' });
+  if (!capture?.ok || !capture.dataUrl) throw new Error(capture?.error || 'Falha ao capturar a página inteira.');
 
-  const originalX = scrollX;
-  const originalY = scrollY;
+  const screenshot = await loadScreenshot(capture.dataUrl);
+  const documentWidth = capture.width || document.documentElement.scrollWidth;
+  const documentHeight = capture.height || document.documentElement.scrollHeight;
+  const pixelPerCssX = screenshot.naturalWidth / documentWidth;
+  const pixelPerCssY = screenshot.naturalHeight / documentHeight;
+  const cssPerPixelX = documentWidth / screenshot.naturalWidth;
+  const cssPerPixelY = documentHeight / screenshot.naturalHeight;
+  const tilePixelHeight = Math.max(200, Math.round(OCR_TILE_CSS_HEIGHT * pixelPerCssY));
+  const overlapPixels = Math.max(20, Math.round(OCR_TILE_OVERLAP * pixelPerCssY));
+  const stepPixels = Math.max(1, tilePixelHeight - overlapPixels);
+
   const overlay = document.createElement('div');
   overlay.id = PAGE_OVERLAY_ID;
-  overlay.style.cssText = 'position:absolute;left:0;top:0;z-index:2147483646;pointer-events:none;overflow:visible;width:100%;height:0';
+  overlay.style.cssText = `position:absolute;left:0;top:0;width:${documentWidth}px;height:${documentHeight}px;z-index:2147483646;pointer-events:none;overflow:visible`;
   document.documentElement.appendChild(overlay);
 
   const { targetLanguage = 'pt' } = await chrome.storage.sync.get({ targetLanguage: 'pt' });
   const seen = new Set();
   let totalBlocks = 0;
-  let captures = 0;
+  let tiles = 0;
   let setupRequired = false;
 
-  try {
-    const viewportHeight = Math.max(1, innerHeight);
-    const overlap = Math.min(180, Math.round(viewportHeight * 0.18));
-    const step = Math.max(1, viewportHeight - overlap);
-    let y = 0;
+  for (let sourceY = 0; sourceY < screenshot.naturalHeight && tiles < MAX_FULL_PAGE_TILES; sourceY += stepPixels) {
+    const sourceHeight = Math.min(tilePixelHeight, screenshot.naturalHeight - sourceY);
+    const tile = cropTile(screenshot, sourceY, sourceHeight);
+    const paragraphs = await recognizeScreenshot(tile);
 
-    while (captures < MAX_FULL_PAGE_CAPTURES) {
-      const documentHeight = Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0);
-      const maxY = Math.max(0, documentHeight - viewportHeight);
-      y = Math.min(y, maxY);
-      scrollTo(0, y);
-      await waitForScroll();
+    for (const block of paragraphs) {
+      const docX = block.box.x * cssPerPixelX;
+      const docY = (sourceY + block.box.y) * cssPerPixelY;
+      const docWidth = block.box.width * cssPerPixelX;
+      const docHeight = block.box.height * cssPerPixelY;
+      const key = blockKey(block.text, docX, docY, docWidth, docHeight);
+      if (seen.has(key)) continue;
+      seen.add(key);
 
-      overlay.hidden = true;
-      const capture = await chrome.runtime.sendMessage({ type: 'CAPTURE_VISIBLE_TAB' });
-      overlay.hidden = false;
-      if (!capture?.ok || !capture.dataUrl) throw new Error(capture?.error || 'Falha ao capturar a página.');
+      let translated = block.text;
+      try { translated = await translateText(block.text, targetLanguage); }
+      catch (error) { if (error.code === 'NATIVE_SETUP_REQUIRED') setupRequired = true; }
 
-      const screenshot = await loadScreenshot(capture.dataUrl);
-      const paragraphs = await recognizeScreenshot(screenshot);
-      const scaleX = innerWidth / screenshot.naturalWidth;
-      const scaleY = innerHeight / screenshot.naturalHeight;
-      const currentScrollX = scrollX;
-      const currentScrollY = scrollY;
-
-      for (const block of paragraphs) {
-        const docX = currentScrollX + block.box.x * scaleX;
-        const docY = currentScrollY + block.box.y * scaleY;
-        const docWidth = block.box.width * scaleX;
-        const docHeight = block.box.height * scaleY;
-        const key = blockKey(block.text, docX, docY, docWidth, docHeight);
-        if (seen.has(key)) continue;
-        seen.add(key);
-
-        let translated = block.text;
-        try {
-          translated = await translateText(block.text, targetLanguage);
-        } catch (error) {
-          if (error.code === 'NATIVE_SETUP_REQUIRED') setupRequired = true;
-        }
-
-        const label = createLabel(block, translated, scaleX, scaleY, currentScrollX, currentScrollY);
-        overlay.appendChild(label);
-        fitText(label, block.box.height * scaleY * 0.45);
-        totalBlocks += 1;
-      }
-
-      captures += 1;
-      if (y >= maxY) break;
-      y = Math.min(maxY, y + step);
+      const label = createLabel(block, translated, cssPerPixelX, cssPerPixelY, 0, sourceY * cssPerPixelY);
+      overlay.appendChild(label);
+      fitText(label, block.box.height * cssPerPixelY * 0.45);
+      totalBlocks += 1;
     }
-
-    return {
-      processed: captures,
-      blocks: totalBlocks,
-      nativeSetupRequired: setupRequired,
-      truncated: captures >= MAX_FULL_PAGE_CAPTURES
-    };
-  } finally {
-    overlay.hidden = false;
-    scrollTo(originalX, originalY);
+    tiles += 1;
   }
+
+  return {
+    processed: tiles,
+    blocks: totalBlocks,
+    nativeSetupRequired: setupRequired,
+    truncated: tiles >= MAX_FULL_PAGE_TILES && tilePixelHeight * tiles < screenshot.naturalHeight,
+    captureMode: 'debugger-full-page'
+  };
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -183,7 +163,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message.type === 'SCAN_FULL_PAGE') {
-    processFullPage().then(sendResponse).catch((error) => sendResponse({ processed: 0, error: error.message }));
+    processFullPageWithoutScroll().then(sendResponse).catch((error) => sendResponse({ processed: 0, error: error.message }));
     return true;
   }
   if (message.type === 'CLEAR_SCREEN_OVERLAY') {
