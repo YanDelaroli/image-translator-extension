@@ -49,23 +49,57 @@ class ImageTranslatorOcrEngine {
       .filter((item) => item.text);
   }
 
+  flattenTesseractBlocks(blocks) {
+    const output = [];
+
+    for (const block of blocks || []) {
+      for (const paragraph of block.paragraphs || []) {
+        for (const line of paragraph.lines || []) {
+          const words = line.words || [];
+          if (words.length) {
+            for (const word of words) {
+              const text = word.text?.trim() || '';
+              const bbox = word.bbox;
+              const confidence = Number(word.confidence ?? line.confidence ?? 0) / 100;
+              if (!text || !bbox || confidence < 0.25) continue;
+              output.push({
+                text,
+                confidence,
+                box: {
+                  x: bbox.x0,
+                  y: bbox.y0,
+                  width: bbox.x1 - bbox.x0,
+                  height: bbox.y1 - bbox.y0
+                }
+              });
+            }
+            continue;
+          }
+
+          const text = line.text?.trim() || '';
+          const bbox = line.bbox;
+          if (!text || !bbox) continue;
+          output.push({
+            text,
+            confidence: Number(line.confidence || 0) / 100,
+            box: {
+              x: bbox.x0,
+              y: bbox.y0,
+              width: bbox.x1 - bbox.x0,
+              height: bbox.y1 - bbox.y0
+            }
+          });
+        }
+      }
+    }
+
+    return output;
+  }
+
   async recognizeWithTesseract(image) {
     const worker = await this.getTesseractWorker();
-    const result = await worker.recognize(image);
-    const words = result?.data?.words || [];
-
-    return words
-      .map((word) => ({
-        text: word.text?.trim() || '',
-        confidence: Number(word.confidence || 0) / 100,
-        box: {
-          x: word.bbox.x0,
-          y: word.bbox.y0,
-          width: word.bbox.x1 - word.bbox.x0,
-          height: word.bbox.y1 - word.bbox.y0
-        }
-      }))
-      .filter((item) => item.text && item.confidence >= 0.35);
+    const result = await worker.recognize(image, {}, { blocks: true });
+    return this.flattenTesseractBlocks(result?.data?.blocks);
   }
 
   async recognize(image) {
