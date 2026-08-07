@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Image Translator</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Image Translator</h1>
+      <p>Reconheça e traduza textos encontrados em imagens.</p>
+
+      <label class="row">
+        <span>Ativar extensão</span>
+        <input id="enabled" type="checkbox" />
+      </label>
+
+      <label>
+        Idioma de destino
+        <select id="targetLanguage">
+          <option value="pt">Português</option>
+          <option value="en">Inglês</option>
+          <option value="es">Espanhol</option>
+          <option value="fr">Francês</option>
+          <option value="de">Alemão</option>
+          <option value="ja">Japonês</option>
+        </select>
+      </label>
+
+      <details>
+        <summary>Configurar tradução</summary>
+        <label>
+          Endpoint compatível com LibreTranslate
+          <input id="translationEndpoint" type="url" placeholder="Opcional: https://seu-servidor/translate" />
+        </label>
+        <label>
+          Chave da API (opcional)
+          <input id="translationApiKey" type="password" autocomplete="off" />
+        </label>
+      </details>
+
+      <button id="scan" type="button">Analisar imagens da página</button>
+      <button id="scanScreen" class="secondary" type="button">Capturar área visível</button>
+      <button id="scanFullPage" class="secondary" type="button">Traduzir página inteira sem rolar</button>
+      <button id="clearCache" class="secondary" type="button">Limpar caches</button>
+      <output id="status" aria-live="polite"></output>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

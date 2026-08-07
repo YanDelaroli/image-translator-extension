@@ -1,0 +1,264 @@
+const OVERLAY_CLASS = 'image-translator-overlay';
+const LABEL_CLASS = 'image-translator-label';
+const OCR_CACHE_PREFIX = 'ocr-cache:';
+const OCR_CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
+let settings = { enabled: false, targetLanguage: 'pt', translationEndpoint: '', translationApiKey: '' };
+let observer;
+let processing = false;
+
+function isUsableImage(image) {
+  const rect = image.getBoundingClientRect();
+  return image.complete && image.naturalWidth >= 120 && image.naturalHeight >= 60 && rect.width >= 80 && rect.height >= 40;
+}
+
+function removeOverlays() {
+  document.querySelectorAll(`.${OVERLAY_CLASS}`).forEach((element) => element.remove());
+  document.querySelectorAll('[data-image-translator-ready]').forEach((image) => delete image.dataset.imageTranslatorReady);
+}
+
+function findImageForOverlay(overlay) {
+  return document.querySelector(`[data-image-translator-ready="${CSS.escape(overlay.dataset.sourceImageId)}"]`);
+}
+
+function syncOverlay(overlay, image) {
+  const rect = image.getBoundingClientRect();
+  overlay.style.left = `${Math.round(rect.left)}px`;
+  overlay.style.top = `${Math.round(rect.top)}px`;
+  overlay.style.width = `${Math.round(rect.width)}px`;
+  overlay.style.height = `${Math.round(rect.height)}px`;
+  overlay.hidden = rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth;
+}
+
+function createOverlay(image) {
+  if (!settings.enabled || image.dataset.imageTranslatorReady || !isUsableImage(image)) return false;
+  const overlay = document.createElement('div');
+  overlay.className = OVERLAY_CLASS;
+  overlay.dataset.sourceImageId = crypto.randomUUID();
+  overlay.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;overflow:hidden;box-sizing:border-box';
+  const status = document.createElement('div');
+  status.className = LABEL_CLASS;
+  status.textContent = `Pronta para OCR → ${settings.targetLanguage.toUpperCase()}`;
+  status.style.cssText = 'position:absolute;left:0;top:0;max-width:100%;padding:5px 7px;background:rgba(17,17,17,.82);color:#fff;font:600 12px/1.3 system-ui,sans-serif;border-radius:0 0 6px 0;box-sizing:border-box';
+  overlay.appendChild(status);
+  image.dataset.imageTranslatorReady = overlay.dataset.sourceImageId;
+  document.documentElement.appendChild(overlay);
+  syncOverlay(overlay, image);
+  return true;
+}
+
+function scanPage() {
+  if (!settings.enabled) return 0;
+  let count = 0;
+  document.querySelectorAll('img').forEach((image) => { if (createOverlay(image)) count += 1; });
+  return count;
+}
+
+function refreshOverlayPositions() {
+  document.querySelectorAll(`.${OVERLAY_CLASS}`).forEach((overlay) => {
+    const image = findImageForOverlay(overlay);
+    if (!image?.isConnected) return overlay.remove();
+    syncOverlay(overlay, image);
+  });
+}
+
+async function hashText(value) {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function imageCacheKey(image) {
+  const identity = [image.currentSrc || image.src, image.naturalWidth, image.naturalHeight].join('|');
+  return `${OCR_CACHE_PREFIX}${await hashText(identity)}`;
+}
+
+async function readOcrCache(image) {
+  const key = await imageCacheKey(image);
+  const stored = await chrome.storage.local.get(key);
+  const entry = stored[key];
+  if (!entry || Date.now() - entry.createdAt > OCR_CACHE_MAX_AGE) {
+    if (entry) await chrome.storage.local.remove(key);
+    return null;
+  }
+  return entry.blocks;
+}
+
+async function writeOcrCache(image, blocks) {
+  const key = await imageCacheKey(image);
+  await chrome.storage.local.set({ [key]: { createdAt: Date.now(), blocks } });
+}
+
+async function translateWithFallback(text) {
+  try {
+    const nativeResult = await globalThis.ImageTranslatorNative?.translate(text, settings.targetLanguage);
+    if (nativeResult?.supported) {
+      return { translatedText: nativeResult.translatedText, skipped: false, provider: nativeResult.provider };
+    }
+  } catch (error) {
+    if (error.code === 'NATIVE_SETUP_REQUIRED') {
+      const fallback = await chrome.runtime.sendMessage({ type: 'TRANSLATE_TEXT', text, targetLanguage: settings.targetLanguage });
+      if (fallback?.ok && !fallback.skipped) return fallback;
+      return { translatedText: text, skipped: true, reason: 'native_setup_required' };
+    }
+    console.warn('Falha na tradução nativa:', error);
+  }
+
+  const response = await chrome.runtime.sendMessage({ type: 'TRANSLATE_TEXT', text, targetLanguage: settings.targetLanguage });
+  if (!response?.ok) throw new Error(response?.error || 'Falha desconhecida na tradução');
+  return response;
+}
+
+async function translateBlocks(blocks) {
+  let skipped = false;
+  let setupRequired = false;
+  const translated = [];
+  for (const block of blocks) {
+    try {
+      const result = await translateWithFallback(block.text);
+      skipped ||= Boolean(result.skipped);
+      setupRequired ||= result.reason === 'native_setup_required';
+      translated.push({ ...block, originalText: block.text, text: result.translatedText });
+    } catch (error) {
+      translated.push({ ...block, originalText: block.text, translationError: error.message });
+    }
+  }
+  return { blocks: translated, skipped, setupRequired };
+}
+
+function fitText(label, maxSize) {
+  let size = Math.max(10, Math.min(30, maxSize));
+  label.style.fontSize = `${size}px`;
+  while (size > 9 && (label.scrollWidth > label.clientWidth || label.scrollHeight > label.clientHeight)) {
+    size -= 1;
+    label.style.fontSize = `${size}px`;
+  }
+}
+
+function addNativeSetupButton(overlay) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = 'Ativar tradução local';
+  button.style.cssText = 'position:absolute;left:50%;top:12px;transform:translateX(-50%);z-index:3;pointer-events:auto;border:0;border-radius:8px;padding:9px 12px;background:#111;color:#fff;font:700 12px system-ui;cursor:pointer;box-shadow:0 3px 12px rgba(0,0,0,.35)';
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    button.textContent = 'Baixando modelo…';
+    try {
+      await processOverlay(overlay);
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = `Tentar novamente: ${error.message}`;
+    }
+  });
+  overlay.appendChild(button);
+}
+
+async function renderOcrResult(overlay, image, blocks, setupRequired = false) {
+  overlay.replaceChildren();
+  const rect = image.getBoundingClientRect();
+  const scaleX = rect.width / image.naturalWidth;
+  const scaleY = rect.height / image.naturalHeight;
+
+  for (const { text, originalText, translationError, box } of blocks) {
+    const palette = translationError ? null : await globalThis.ImageTranslatorVisual?.sampleRegion(image, box);
+    const label = document.createElement('div');
+    label.textContent = text;
+    label.title = translationError ? `${originalText || text}\nErro: ${translationError}` : (originalText && originalText !== text ? originalText : 'Texto reconhecido');
+    label.style.cssText = [
+      'position:absolute', `left:${Math.max(0, box.x * scaleX)}px`, `top:${Math.max(0, box.y * scaleY)}px`,
+      `width:${Math.max(32, box.width * scaleX)}px`, `height:${Math.max(20, box.height * scaleY)}px`,
+      'display:flex','align-items:center','justify-content:center','padding:3px 6px',
+      `background:${translationError ? 'rgba(255,235,235,.95)' : (palette?.background || 'rgba(255,255,255,.95)')}`,
+      `color:${translationError ? '#111' : (palette?.foreground || '#111')}`,
+      'font-family:system-ui,sans-serif','font-weight:600','line-height:1.08','text-align:center',
+      `border:1px solid ${translationError ? 'rgba(120,0,0,.2)' : (palette?.border || 'rgba(0,0,0,.18)')}`,
+      'border-radius:3px','box-sizing:border-box','overflow:hidden','white-space:pre-line','text-shadow:0 1px 1px rgba(0,0,0,.12)'
+    ].join(';');
+    overlay.appendChild(label);
+    fitText(label, Math.max(12, Math.min(26, box.height * scaleY * 0.45)));
+  }
+
+  if (setupRequired) addNativeSetupButton(overlay);
+}
+
+async function recognizeWithCache(image, status) {
+  const cached = await readOcrCache(image);
+  if (cached) {
+    if (status) status.textContent = 'OCR carregado do cache…';
+    return cached;
+  }
+  if (status) status.textContent = 'Reconhecendo texto…';
+  const blocks = await globalThis.ImageTranslatorOcr.recognize(image);
+  await writeOcrCache(image, blocks);
+  return blocks;
+}
+
+async function processOverlay(overlay) {
+  const image = findImageForOverlay(overlay);
+  if (!image || !isUsableImage(image)) return { processed: false, skipped: false, setupRequired: false };
+  const status = overlay.querySelector(`.${LABEL_CLASS}`);
+  const recognizedBlocks = await recognizeWithCache(image, status);
+  const lines = globalThis.ImageTranslatorLayout.groupIntoLines(recognizedBlocks);
+  const paragraphs = globalThis.ImageTranslatorLayout.groupIntoParagraphs(lines);
+  if (status) status.textContent = `Traduzindo ${paragraphs.length} parágrafo(s)…`;
+  const result = await translateBlocks(paragraphs);
+  await renderOcrResult(overlay, image, result.blocks, result.setupRequired);
+  return { processed: true, skipped: result.skipped, setupRequired: result.setupRequired };
+}
+
+async function runOcr() {
+  if (processing || !settings.enabled) return { processed: 0, unsupported: false, translationSkipped: false, nativeSetupRequired: false };
+  processing = true;
+  let processed = 0;
+  let translationSkipped = false;
+  let nativeSetupRequired = false;
+  try {
+    if (!globalThis.ImageTranslatorOcr?.isSupported()) {
+      document.querySelectorAll(`.${LABEL_CLASS}`).forEach((label) => { label.textContent = 'Nenhum motor OCR disponível'; });
+      return { processed: 0, unsupported: true, translationSkipped: false, nativeSetupRequired: false };
+    }
+    for (const overlay of document.querySelectorAll(`.${OVERLAY_CLASS}`)) {
+      try {
+        const result = await processOverlay(overlay);
+        if (result.processed) processed += 1;
+        translationSkipped ||= result.skipped;
+        nativeSetupRequired ||= result.setupRequired;
+      } catch (error) {
+        const status = overlay.querySelector(`.${LABEL_CLASS}`);
+        if (status) status.textContent = `Falha no processamento: ${error.message}`;
+      }
+    }
+    return { processed, unsupported: false, translationSkipped, nativeSetupRequired };
+  } finally {
+    processing = false;
+  }
+}
+
+function startObserver() {
+  observer?.disconnect();
+  observer = new MutationObserver(() => scanPage());
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+}
+
+chrome.storage.sync.get({ enabled: false, targetLanguage: 'pt', translationEndpoint: '', translationApiKey: '' }, (stored) => {
+  settings = stored;
+  if (settings.enabled) scanPage();
+  startObserver();
+});
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === 'SETTINGS_UPDATED') {
+    settings = message.settings;
+    removeOverlays();
+    if (settings.enabled) scanPage();
+    sendResponse({ ok: true });
+    return;
+  }
+  if (message.type === 'SCAN_PAGE') {
+    scanPage();
+    runOcr().then(sendResponse);
+    return true;
+  }
+});
+
+addEventListener('scroll', refreshOverlayPositions, { passive: true });
+addEventListener('resize', refreshOverlayPositions, { passive: true });
