@@ -88,7 +88,7 @@ scanScreenButton.addEventListener('click', async () => {
 scanFullPageButton.addEventListener('click', async () => {
   await sendSettings();
   scanFullPageButton.disabled = true;
-  statusOutput.textContent = 'Percorrendo e traduzindo a página inteira...';
+  statusOutput.textContent = 'Capturando a página inteira sem rolagem visível...';
   const tab = await getActiveTab();
   if (!tab?.id) {
     scanFullPageButton.disabled = false;
@@ -99,8 +99,8 @@ scanFullPageButton.addEventListener('click', async () => {
     if (response?.error) statusOutput.textContent = `Falha: ${response.error}`;
     else if (!response?.blocks) statusOutput.textContent = 'Nenhum texto foi encontrado na página.';
     else if (response?.nativeSetupRequired) statusOutput.textContent = `${response.blocks} bloco(s) reconhecido(s). A tradução local precisa ser ativada.`;
-    else if (response?.truncated) statusOutput.textContent = `${response.blocks} bloco(s) traduzido(s). A página excedeu o limite de capturas.`;
-    else statusOutput.textContent = `${response.blocks} bloco(s) traduzido(s) em ${response.processed} trecho(s).`;
+    else if (response?.truncated) statusOutput.textContent = `${response.blocks} bloco(s) traduzido(s). A página excedeu o limite de processamento.`;
+    else statusOutput.textContent = `${response.blocks} bloco(s) traduzido(s) em ${response.processed} faixa(s), sem rolar a página.`;
   } catch {
     statusOutput.textContent = 'Não foi possível capturar a página inteira.';
   } finally {
