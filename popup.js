@@ -3,6 +3,7 @@ const languageSelect = document.querySelector('#targetLanguage');
 const endpointInput = document.querySelector('#translationEndpoint');
 const apiKeyInput = document.querySelector('#translationApiKey');
 const scanButton = document.querySelector('#scan');
+const scanScreenButton = document.querySelector('#scanScreen');
 const clearCacheButton = document.querySelector('#clearCache');
 const statusOutput = document.querySelector('#status');
 
@@ -58,17 +59,28 @@ scanButton.addEventListener('click', async () => {
   if (!tab?.id) return void (statusOutput.textContent = 'Não foi possível acessar esta aba.');
   try {
     const response = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_PAGE' });
-    if (response?.unsupported) {
-      statusOutput.textContent = 'Nenhum motor OCR disponível.';
-    } else if (response?.nativeSetupRequired) {
-      statusOutput.textContent = 'Clique em “Ativar tradução local” sobre a imagem para baixar o modelo do Chrome.';
-    } else if (response?.translationSkipped) {
-      statusOutput.textContent = `${response.processed ?? 0} imagem(ns) reconhecida(s), mas a tradução local não está disponível neste Chrome.`;
-    } else {
-      statusOutput.textContent = `${response?.processed ?? 0} imagem(ns) processada(s).`;
-    }
+    if (response?.unsupported) statusOutput.textContent = 'Nenhum motor OCR disponível.';
+    else if (response?.nativeSetupRequired) statusOutput.textContent = 'Clique em “Ativar tradução local” sobre a imagem.';
+    else if (response?.translationSkipped) statusOutput.textContent = `${response.processed ?? 0} imagem(ns) reconhecida(s), mas não traduzida(s).`;
+    else statusOutput.textContent = `${response?.processed ?? 0} imagem(ns) processada(s).`;
   } catch {
     statusOutput.textContent = 'Recarregue a página e tente novamente.';
+  }
+});
+
+scanScreenButton.addEventListener('click', async () => {
+  await sendSettings();
+  statusOutput.textContent = 'Capturando e analisando a área visível...';
+  const tab = await getActiveTab();
+  if (!tab?.id) return void (statusOutput.textContent = 'Não foi possível acessar esta aba.');
+  try {
+    const response = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_VISIBLE_TAB' });
+    if (response?.error) statusOutput.textContent = `Falha: ${response.error}`;
+    else if (response?.reason === 'no_text') statusOutput.textContent = 'Nenhum texto foi encontrado na área visível.';
+    else if (response?.nativeSetupRequired) statusOutput.textContent = 'Texto reconhecido. A tradução local precisa ser ativada no Chrome.';
+    else statusOutput.textContent = `${response?.blocks ?? 0} bloco(s) traduzido(s) na área visível.`;
+  } catch {
+    statusOutput.textContent = 'Não foi possível capturar esta página.';
   }
 });
 
@@ -76,6 +88,8 @@ clearCacheButton.addEventListener('click', async () => {
   clearCacheButton.disabled = true;
   statusOutput.textContent = 'Limpando caches...';
   try {
+    const tab = await getActiveTab();
+    if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: 'CLEAR_SCREEN_OVERLAY' }).catch(() => {});
     const response = await chrome.runtime.sendMessage({ type: 'CLEAR_CACHES' });
     statusOutput.textContent = response?.ok ? `${response.removed ?? 0} entrada(s) removida(s).` : 'Não foi possível limpar os caches.';
   } catch {
