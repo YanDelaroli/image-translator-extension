@@ -68,7 +68,7 @@ async function clearCaches() {
   return removed;
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'TRANSLATE_TEXT') {
     translateText(message.text, message.targetLanguage)
       .then((result) => sendResponse({ ok: true, ...result }))
@@ -79,6 +79,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'CLEAR_CACHES') {
     clearCaches()
       .then((removed) => sendResponse({ ok: true, removed }))
+      .catch((error) => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+
+  if (message.type === 'CAPTURE_VISIBLE_TAB') {
+    const windowId = sender.tab?.windowId;
+    chrome.tabs.captureVisibleTab(windowId, { format: 'png' })
+      .then((dataUrl) => sendResponse({ ok: true, dataUrl }))
       .catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
   }
